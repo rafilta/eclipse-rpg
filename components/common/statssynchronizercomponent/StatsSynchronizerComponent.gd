@@ -388,13 +388,11 @@ func load_defaults():
 	attack_power_max = _default_attack_power_max
 	defense = _default_defense
 	movement_speed = _default_movement_speed
-	if is_instance_valid(target_node) and target_node is Player:
+	if is_instance_valid(target_node) and target_node.get("entity_type") == J.ENTITY_TYPE.PLAYER:
 		var growth: int = maxi(0, level - 1)
-		hp_max += growth * 9
 		energy_max += growth * 4
-		attack_power_min += 3 + growth * 2
-		attack_power_max += 5 + growth * 3
-		defense += int(growth / 3.0)
+		attack_power_min += 3
+		attack_power_max += 5
 
 
 func calculate_experience_needed(current_level: int):
@@ -404,7 +402,7 @@ func calculate_experience_needed(current_level: int):
 
 func add_level(amount: int):
 	level = mini(100, level + maxi(0, amount))
-	if is_instance_valid(target_node) and target_node is Player:
+	if is_instance_valid(target_node) and target_node.get("entity_type") == J.ENTITY_TYPE.PLAYER:
 		reload_boosts()
 		reset_hp()
 		reset_energy()
@@ -459,6 +457,7 @@ func apply_boost(boost: Boost):
 
 	# Add to list
 	active_boosts.append(boost)
+	boosts_changed.emit()
 
 	var data: Dictionary = to_json(true)
 
@@ -468,8 +467,6 @@ func apply_boost(boost: Boost):
 	for watcher in watcher_synchronizer.watchers:
 		_stats_synchronizer_rpc.sync_response(watcher.peer_id, target_node.name, data)
 
-	# This signal calls reload_boosts()
-	boosts_changed.emit()
 
 
 ## Attempts to remove a boost per reference.
@@ -479,6 +476,7 @@ func remove_boost(boost: Boost):
 		return
 
 	active_boosts.erase(boost)
+	boosts_changed.emit()
 
 	var data: Dictionary = to_json(true)
 

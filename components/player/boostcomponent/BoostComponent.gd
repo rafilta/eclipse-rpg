@@ -29,9 +29,11 @@ func _ready():
 
 func _calculate_level_boost() -> Boost:
 	var boost: Boost = Boost.new()
-	boost.hp_max = int((stats_synchronizer.level - 1) * hp_gain_per_level)
-	boost.attack_power_min = int(stats_synchronizer.level * attack_power_gain_per_level)
-	boost.attack_power_max = boost.attack_power_min
+	var growth: int = maxi(0, stats_synchronizer.level - 1)
+	boost.hp_max = growth * 9
+	boost.attack_power_min = growth * 2
+	boost.attack_power_max = growth * 3
+	boost.defense = int(growth / 3.0)
 	return boost
 
 
