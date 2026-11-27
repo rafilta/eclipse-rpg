@@ -155,7 +155,7 @@ func _init_point_params():
 # Remember inputs are only handled on client-side
 func _input(event: InputEvent):
 	# Don't do anything when above ui
-	if JUI.above_ui:
+	if JUI.above_ui or JUI.chat_active:
 		return
 
 	# Handle right mouse clicks
@@ -195,6 +195,9 @@ func _physics_process(delta):
 			"j_move_left", "j_move_right", "j_move_up", "j_move_down"
 		)
 
+		if direction.is_zero_approx():
+			direction = Input.get_vector("ui_left", "ui_right", "ui_up", "ui_down")
+
 		# Append this movement vector to the input buffer
 		_input_buffer.append({"cf": _current_frame, "dir": direction})
 
@@ -218,6 +221,13 @@ func _physics_process(delta):
 		# Query which target is under the mouse, this is mainly used to update the cursor accordingly
 		# Example: when hovering over an NPC the mouse will change to green with the text "hi"
 		_client_query_targets_under_mouse(mouse_global_pos)
+
+		# Held attacks use the same cooldown and network request as single attacks.
+		if not JUI.above_ui and _attack_timer.is_stopped():
+			if Input.is_physical_key_pressed(KEY_SPACE):
+				_on_client_interacted(null)
+			elif Input.is_action_pressed("j_right_click") and is_instance_valid(current_target) and current_target.entity_type == J.ENTITY_TYPE.ENEMY:
+				_on_client_interacted(current_target)
 
 		# Update the player's animation accordingly to the new velocity
 		_client_update_animation()
@@ -291,6 +301,8 @@ func _client_query_targets_under_mouse(at_global_point: Vector2):
 		# Don't allow to target yourself
 		if target != _target_node:
 			current_target = target
+		else:
+			current_target = null
 
 
 # Handle the player's animation when moving or stopped
@@ -325,8 +337,10 @@ func server_sync_input(frame: int, direction: Vector2, timestamp: float):
 
 	_current_frame = frame
 
-	# Store the inputs in a input buffer
-	_input_buffer.append({"dir": direction, "dt": timestamp})
+	# Restrict client input magnitude and simulation time on the server.
+	if not direction.is_finite() or not is_finite(timestamp):
+		return
+	_input_buffer.append({"dir": direction.limit_length(1.0), "dt": clampf(timestamp, 0.0, 0.05)})
 
 
 func server_sync_interact(target_name: String):
@@ -360,14 +374,25 @@ func server_sync_interact(target_name: String):
 
 func server_handle_attack_request(timestamp: float, direction: Vector2, enemies: Array):
 	# Don't do anything if the attack timer is running, this means your attack is still on timeout
-	if !_attack_timer.is_stopped():
+	if stats_component.is_dead or not _attack_timer.is_stopped():
 		return
+	if not direction.is_finite() or not is_finite(timestamp) or direction.length_squared() < 0.001:
+		return
+	direction = direction.normalized()
+	_attack_timer.start(maxf(0.1, stats_component.attack_speed))
+	var checked: Dictionary = {}
+	var now: float = Time.get_unix_time_from_system()
+	var hit_time: float = clampf(timestamp - INTERPOLATION_OFFSET, now - 1.0, now)
+	var attack_center: Vector2 = _target_node.position + direction * interaction_component.attack_range
 
 	# Synchronize to other players that the player attacked
 	action_synchronizer.attack(direction)
 
 	# Loop over the enemies
-	for enemy_name in enemies:
+	for enemy_name in enemies.slice(0, 32):
+		if not enemy_name is String or checked.has(enemy_name):
+			continue
+		checked[enemy_name] = true
 		# Get the enemies by their name
 		var enemy: Node2D = _target_node.multiplayer_connection.map.enemies.get_node_or_null(
 			enemy_name
@@ -387,9 +412,9 @@ func server_handle_attack_request(timestamp: float, direction: Vector2, enemies:
 		if (
 			enemy.get("lag_compensation")
 			and enemy.lag_compensation.IsCircleCollidingWithTargetAtTimestamp(
-				timestamp - INTERPOLATION_OFFSET,
-				_target_node.position,
-				interaction_component.attack_radius + interaction_component.attack_range
+				hit_time,
+				attack_center,
+				interaction_component.attack_radius
 			)
 		):
 			# Generate a random damage between the player's min and max attack power
@@ -456,7 +481,10 @@ func _on_client_interacted(target: Node2D):
 		var random_index = randi() % ATTACK_LEFT_HAND_ANIMATIONS.size()
 		animation_player.play(ATTACK_LEFT_HAND_ANIMATIONS[random_index])
 
-	var attack_direction: Vector2 = _target_node.position.direction_to(mouse_global_pos)
+	mouse_global_pos = _target_node.get_global_mouse_position()
+	var attack_direction: Vector2 = _target_node.global_position.direction_to(mouse_global_pos)
+	if attack_direction.is_zero_approx():
+		attack_direction = Vector2.RIGHT if _original_direction else Vector2.LEFT
 
 	# Emit the signal that the player attacked
 	attacked.emit(attack_direction)
@@ -467,7 +495,8 @@ func _on_client_interacted(target: Node2D):
 	var hit_enemies: Array[String] = []
 
 	for enemy in interaction_component.enemies_in_attack_range:
-		hit_enemies.append(enemy.name)
+		if is_instance_valid(enemy) and not enemy.stats.is_dead:
+			hit_enemies.append(str(enemy.name))
 
 	_player_synchronizer_rpc.request_attack(
 		_clock_synchronizer.client_clock, attack_direction, hit_enemies
