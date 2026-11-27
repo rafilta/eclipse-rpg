@@ -21,6 +21,11 @@ const ATTACK_LEFT_HAND_ANIMATIONS: Array[String] = [
 
 ## TODO: fetch the interpolation offset from the positionsynchronizer
 const INTERPOLATION_OFFSET: float = 0.1
+const EclipseFX = preload("res://eclipse/combat_fx.gd")
+const SKILL_COSTS = [0, 12, 20, 28]
+const SKILL_LEVELS = [1, 1, 2, 3]
+const SKILL_COOLDOWNS = [0.0, 1.0, 1.3, 1.8]
+const SKILL_MULTIPLIERS = [1.0, 1.9, 1.5, 1.35]
 
 @export var stats_component: StatsSynchronizerComponent
 @export var interaction_component: PlayerInteractionComponent
@@ -157,6 +162,12 @@ func _input(event: InputEvent):
 	# Don't do anything when above ui
 	if JUI.above_ui or JUI.chat_active:
 		return
+
+	if event is InputEventKey and event.pressed and not event.echo:
+		match event.physical_keycode:
+			KEY_1: _on_client_interacted(null, 1)
+			KEY_2: _on_client_interacted(null, 2)
+			KEY_3: _on_client_interacted(null, 3)
 
 	# Handle right mouse clicks
 	if event.is_action_pressed("j_right_click"):
@@ -372,13 +383,23 @@ func server_sync_interact(target_name: String):
 	interacted.emit(target)
 
 
-func server_handle_attack_request(timestamp: float, direction: Vector2, enemies: Array):
+func server_handle_attack_request(timestamp: float, direction: Vector2, enemies: Array, skill: int = 0):
 	# Don't do anything if the attack timer is running, this means your attack is still on timeout
 	if stats_component.is_dead or not _attack_timer.is_stopped():
 		return
 	if not direction.is_finite() or not is_finite(timestamp) or direction.length_squared() < 0.001:
 		return
 	direction = direction.normalized()
+	if skill < 0 or skill > 3:
+		return
+	if stats_component.level < int(SKILL_LEVELS[skill]) or stats_component.energy < int(SKILL_COSTS[skill]):
+		return
+	if skill > 0:
+		if not stats_component.spend_energy(int(SKILL_COSTS[skill])):
+			return
+		_attack_timer.start(maxf(stats_component.attack_speed, float(SKILL_COOLDOWNS[skill])))
+		_server_skill(direction, skill)
+		return
 	_attack_timer.start(maxf(0.1, stats_component.attack_speed))
 	var checked: Dictionary = {}
 	var now: float = Time.get_unix_time_from_system()
@@ -406,6 +427,10 @@ func server_handle_attack_request(timestamp: float, direction: Vector2, enemies:
 		# The dead shall not be touched again
 		if enemy.stats.is_dead:
 			continue
+		if _target_node.position.distance_to(enemy.position) > interaction_component.attack_range + interaction_component.attack_radius + 32.0:
+			continue
+		if not _clear_hit(enemy):
+			continue
 
 		# If the enemy collided with the target_node's attack area deal damage
 		# TODO: now the target can still hit all enemies 360 degrees around him/her. Add aim.
@@ -423,7 +448,45 @@ func server_handle_attack_request(timestamp: float, direction: Vector2, enemies:
 			)
 
 			# This is the call that actually hurts the enemy
+			damage = maxi(1, damage)
+			if randf() < 0.12:
+				damage = int(ceil(damage * 1.7))
 			enemy.stats.hurt(_target_node, damage)
+
+
+func _clear_hit(enemy: Node2D) -> bool:
+	var origin: Vector2 = _target_node.global_position
+	var destination: Vector2 = enemy.global_position
+	if origin.distance_to(destination) < 1.0:
+		return true
+	var query := PhysicsRayQueryParameters2D.create(origin, destination, J.PHYSICS_LAYER_WORLD)
+	return get_world_2d().direct_space_state.intersect_ray(query).is_empty()
+
+
+func _server_skill(direction: Vector2, skill: int) -> void:
+	# Server selects victims, not the client. No free hits through walls.
+	action_synchronizer.attack(direction)
+	var origin: Vector2 = _target_node.global_position
+	var victims: Array[Enemy] = []
+	for child in _target_node.multiplayer_connection.map.enemies.get_children():
+		if not child is Enemy or child.stats.is_dead:
+			continue
+		var enemy: Enemy = child
+		var offset: Vector2 = enemy.global_position - origin
+		var distance := offset.length()
+		var reach: float = float([0, 110, 220, 135][skill])
+		if distance > reach:
+			continue
+		if skill != 3 and distance > 1.0 and direction.dot(offset.normalized()) < (0.55 if skill == 1 else 0.78):
+			continue
+		if not _clear_hit(enemy):
+			continue
+		victims.append(enemy)
+	victims.sort_custom(func(a: Enemy, b: Enemy): return a.global_position.distance_squared_to(origin) < b.global_position.distance_squared_to(origin))
+	var limit: int = int([0, 3, 1, 6][skill])
+	for i in range(mini(limit, victims.size())):
+		var damage: int = maxi(1, int(round(randi_range(stats_component.attack_power_min, stats_component.attack_power_max) * float(SKILL_MULTIPLIERS[skill]))))
+		victims[i].stats.hurt(_target_node, damage)
 
 
 func _on_died():
@@ -463,7 +526,11 @@ func _on_direction_changed(original: bool):
 		animation_player.seek(current_animation_position)
 
 
-func _on_client_interacted(target: Node2D):
+func _on_client_interacted(target: Node2D, skill: int = 0):
+	if stats_component.is_dead or skill < 0 or skill > 3:
+		return
+	if stats_component.level < int(SKILL_LEVELS[skill]) or stats_component.energy < int(SKILL_COSTS[skill]):
+		return
 	# Only handle the case of you hitting air (null) or the target is an enemy
 	# The case to hit air allows you to miss hits or just perform swings around you
 	if target != null and target.entity_type != J.ENTITY_TYPE.ENEMY:
@@ -490,7 +557,15 @@ func _on_client_interacted(target: Node2D):
 	attacked.emit(attack_direction)
 
 	# Start the timer so that the player needs to wait for this timer to stop before performing another attack
-	_attack_timer.start(stats_component.attack_speed)
+	_attack_timer.start(maxf(stats_component.attack_speed, float(SKILL_COOLDOWNS[skill])))
+	if skill > 0:
+		var fx = EclipseFX.new()
+		fx.direction = attack_direction
+		fx.skill = skill
+		fx.position = _target_node.global_position
+		fx.z_index = 15
+		_target_node.get_parent().add_child(fx)
+		fx.global_position = _target_node.global_position
 
 	var hit_enemies: Array[String] = []
 
@@ -499,5 +574,5 @@ func _on_client_interacted(target: Node2D):
 			hit_enemies.append(str(enemy.name))
 
 	_player_synchronizer_rpc.request_attack(
-		_clock_synchronizer.client_clock, attack_direction, hit_enemies
+		_clock_synchronizer.client_clock, attack_direction, hit_enemies, skill
 	)

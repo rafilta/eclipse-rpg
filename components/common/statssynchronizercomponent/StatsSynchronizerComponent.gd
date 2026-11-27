@@ -288,6 +288,8 @@ func check_server_buffer():
 
 
 func hurt(from: Node, damage: int) -> int:
+	if is_dead or hp <= 0 or not target_node.multiplayer_connection.is_server():
+		return 0
 	# # Reduce the damage according to the defense stat
 	var reduced_damage = max(0, damage - defense)
 
@@ -340,6 +342,14 @@ func reset_hp():
 	_sync_int_change(TYPE.HP, hp)
 
 
+func spend_energy(amount: int) -> bool:
+	if not target_node.multiplayer_connection.is_server() or is_dead or amount < 0 or energy < amount:
+		return false
+	energy -= amount
+	_sync_int_change(TYPE.ENERGY, energy)
+	return true
+
+
 func reset_energy():
 	energy = energy_max
 	_sync_int_change(TYPE.ENERGY, energy)
@@ -378,25 +388,40 @@ func load_defaults():
 	attack_power_max = _default_attack_power_max
 	defense = _default_defense
 	movement_speed = _default_movement_speed
+	if is_instance_valid(target_node) and target_node is Player:
+		var growth: int = maxi(0, level - 1)
+		hp_max += growth * 9
+		energy_max += growth * 4
+		attack_power_min += 3 + growth * 2
+		attack_power_max += 5 + growth * 3
+		defense += int(growth / 3.0)
 
 
 func calculate_experience_needed(current_level: int):
-	# TODO: Replace placeholder function to calculate experience needed to level up
-	return BASE_EXPERIENCE + (BASE_EXPERIENCE * (pow(current_level, 2) - 1))
+	var n: int = maxi(1, current_level)
+	return 60 + n * 30 + n * n * 5
 
 
 func add_level(amount: int):
-	level += amount
-
+	level = mini(100, level + maxi(0, amount))
+	if is_instance_valid(target_node) and target_node is Player:
+		reload_boosts()
+		reset_hp()
+		reset_energy()
+		if peer_id > 0:
+			_stats_synchronizer_rpc.sync_response(peer_id, target_node.name, to_json(true))
 	_sync_int_change(TYPE.LEVEL, level)
+	_sync_int_change(TYPE.EXPERIENCE_NEEDED, experience_needed)
 
 
 func add_experience(amount: int):
-	experience += amount
+	experience += maxi(0, amount)
 
-	while experience >= experience_needed:
+	while level < 100 and experience_needed > 0 and experience >= experience_needed:
 		experience -= experience_needed
 		add_level(1)
+	if level >= 100:
+		experience = mini(experience, experience_needed)
 
 	_sync_int_change(TYPE.EXPERIENCE, experience)
 

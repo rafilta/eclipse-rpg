@@ -34,3 +34,16 @@ func _ready():
 	hurtbox.collision_layer = J.PHYSICS_LAYER_ENEMIES
 	# We're not interested in others
 	hurtbox.collision_mask = 0
+	if multiplayer_connection.is_server():
+		var drops := get_node_or_null("LootComponent") as LootComponent
+		if drops == null:
+			drops = LootComponent.new()
+			drops.name = "EclipseLoot"
+			drops.stats = stats
+			add_child(drops)
+		var hard: bool = enemy_class in ["WildBoar", "BlueMole"]
+		drops.add_item_to_loottable("Gold", 1.0 if hard else 0.8, 30 if hard else 12)
+		drops.add_item_to_loottable("HealthPotion", 0.35 if hard else 0.20, 2)
+		drops.add_item_to_loottable("Sword", 0.10 if hard else 0.025, 1)
+		drops.add_item_to_loottable("PlateBody", 0.035 if hard else 0.005, 1)
+		drops.add_item_to_loottable("PlateHelm", 0.045 if hard else 0.008, 1)

@@ -14,10 +14,8 @@ func renew_values():
 		return
 
 	var progress: float = float(stats.experience) / stats.experience_needed * 100
-	if progress >= 100:
-		progress = 0
-
-	value = progress
+	value = clampf(progress, 0.0, 100.0)
+	tooltip_text = "XP %d / %d | Nível %d" % [stats.experience, stats.experience_needed, stats.level]
 
 
 func _on_stats_changed(type: StatsSynchronizerComponent.TYPE):

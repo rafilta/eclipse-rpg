@@ -46,9 +46,9 @@ func sync_interact(target: String):
 	_network_message_handler.send_message(1, message_identifier, [TYPE.INTERACT, target])
 
 
-func request_attack(timestamp: float, direction: Vector2, enemies: Array):
+func request_attack(timestamp: float, direction: Vector2, enemies: Array, skill: int = 0):
 	_network_message_handler.send_message(
-		1, message_identifier, [TYPE.ATTACK, timestamp, direction, enemies]
+		1, message_identifier, [TYPE.ATTACK, timestamp, direction, enemies, skill]
 	)
 
 
@@ -61,7 +61,7 @@ func handle_message(peer_id: int, message: Array):
 		TYPE.INTERACT:
 			_sync_interact(peer_id, message[1])
 		TYPE.ATTACK:
-			_request_attack(peer_id, message[1], message[2], message[3])
+			_request_attack(peer_id, message[1], message[2], message[3], int(message[4]) if message.size() > 4 else 0)
 
 
 func _sync_pos(id: int, c: int, p: Vector2):
@@ -107,7 +107,7 @@ func _sync_interact(id: int, t: String):
 		user.player.component_list["player_synchronizer"].server_sync_interact(t)
 
 
-func _request_attack(id: int, t: float, d: Vector2, e: Array):
+func _request_attack(id: int, t: float, d: Vector2, e: Array, skill: int = 0):
 	var user: MultiplayerConnection.User = _multiplayer_connection.get_user_by_id(id)
 	if user == null:
 		return
@@ -119,4 +119,4 @@ func _request_attack(id: int, t: float, d: Vector2, e: Array):
 		return
 
 	if user.player.component_list.has("player_synchronizer"):
-		user.player.component_list["player_synchronizer"].server_handle_attack_request(t, d, e)
+		user.player.component_list["player_synchronizer"].server_handle_attack_request(t, d, e, skill)

@@ -38,6 +38,9 @@ func _ready():
 			stats.respawned.connect(_on_respawned)
 
 			focus_camera()
+			var eclipse_hud = preload("res://eclipse/adventure_hud.gd").new()
+			eclipse_hud.player = self
+			$Camera2D/UILayer.add_child(eclipse_hud)
 		else:
 			$Camera2D.queue_free()
 

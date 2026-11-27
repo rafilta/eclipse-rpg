@@ -54,6 +54,9 @@ func load_persistent_data() -> bool:
 
 	if data.is_empty():
 		GodotLogger.info("Player=[%s] does not have peristent data" % target_node.username)
+		stats.reload_boosts()
+		stats.reset_hp()
+		stats.reset_energy()
 		return true
 
 	# This function's minimal requirement is that the world and postion key is available in the data
@@ -88,6 +91,11 @@ func load_persistent_data() -> bool:
 	if equipment and "equipment" in data:
 		if not equipment.from_json(data["equipment"]):
 			GodotLogger.warn("Failed to load equipment from data")
+
+	if stats:
+		stats.reload_boosts()
+		stats.hp = clampi(stats.hp, 0, stats.hp_max)
+		stats.energy = clampi(stats.energy, 0, stats.energy_max)
 
 	# if character_class and "characterClass" in data:
 	# 	if not character_class.from_json(data["characterClass"]):
